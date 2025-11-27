@@ -1,0 +1,15 @@
+/* 
+  Tailwind CSS is currently loaded via CDN in index.html to avoid build dependency issues.
+  Add custom styles here if needed.
+*/
+
+/* Remove up and down arrows from all numeric fields */
+input[type=number]::-webkit-inner-spin-button, 
+input[type=number]::-webkit-outer-spin-button { 
+  -webkit-appearance: none; 
+  margin: 0; 
+}
+
+input[type=number] {
+  -moz-appearance: textfield;
+}
