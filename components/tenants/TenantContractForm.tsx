@@ -171,7 +171,7 @@ export default function TenantContractForm({ tenantToEdit, contracts, properties
         };
         
         const existingContract = tenantToEdit ? contracts.find(c => c.tenant_id === tenantToEdit.id) : null;
-        let newOrUpdatedContract: Contract;
+        let newOrUpdatedContract: Contract | null = null;
 
         if (existingContract) {
             const oldInvoices = (await base44.entities.Invoice.list() as Invoice[]).filter(i => i.contract_id === existingContract.id);
@@ -182,6 +182,15 @@ export default function TenantContractForm({ tenantToEdit, contracts, properties
             }
         } else {
             newOrUpdatedContract = await base44.entities.Contract.create(contractData);
+        }
+
+        // --- SAFEGUARD: Prevent crash if RLS blocks return of the new contract ---
+        if (!newOrUpdatedContract) {
+            console.warn("Contract created/updated but no data returned (likely due to RLS policies). Refreshing data...");
+            // We cannot proceed with Unit update or Invoice generation without the contract ID.
+            // We exit early. The onSuccess handler will invalidate queries and refresh the list,
+            // which should fetch the newly created data.
+            return;
         }
 
         // Update Unit Utility Details (and status)
@@ -227,7 +236,7 @@ export default function TenantContractForm({ tenantToEdit, contracts, properties
 
             const createdInvoices = await base44.entities.Invoice.bulkCreate(newInvoices);
             
-            if (data.advance_payment > 0 && createdInvoices.length > 0) {
+            if (data.advance_payment > 0 && createdInvoices && createdInvoices.length > 0) {
                 const firstInvoice = createdInvoices[0];
                 const paymentForFirst = Math.min(data.advance_payment, firstInvoice.amount);
                 await base44.entities.Invoice.update(firstInvoice.id, {

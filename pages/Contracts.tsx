@@ -25,7 +25,8 @@ export default function Contracts() {
 
   const { data: contracts = [], isLoading: loadingContracts } = useQuery<Contract[]>({
     queryKey: ['contracts'],
-    queryFn: () => base44.entities.Contract.list('-created_date'),
+    // FIX: Changed '-created_date' to '-created_at' as that is the standard Supabase column
+    queryFn: () => base44.entities.Contract.list('-created_at'),
   });
 
   const { data: tenants = [] } = useQuery<Tenant[]>({

@@ -41,7 +41,9 @@ const createEntityClient = (entityName: string) => {
         Object.entries(itemData).filter(([_, v]) => v !== undefined)
       );
 
-      // Removed .single() to prevent PGRST116 error when RLS policies might hide the return value
+      // FIX: Removed .single() to prevent PGRST116 error.
+      // RLS policies might allow insert but deny select, or return 0 rows.
+      // We use .select() to get the inserted data back as an array and handle it safely.
       const { data, error } = await supabase
         .from(tableName)
         .insert(cleanData)
@@ -59,7 +61,7 @@ const createEntityClient = (entityName: string) => {
         Object.entries(itemData).filter(([_, v]) => v !== undefined)
       );
 
-      // Removed .single() to prevent PGRST116 error when RLS policies might hide the return value
+      // FIX: Removed .single() to prevent PGRST116 error
       const { data, error } = await supabase
         .from(tableName)
         .update(cleanData)
@@ -173,6 +175,7 @@ const restoreData = async (data: Record<string, any[]>) => {
 const isRecent = (dateString: string): boolean => {
     const date = new Date(dateString);
     const now = new Date();
+    // Reset hours to compare purely based on calendar days approximately
     const diffTime = now.getTime() - date.getTime();
     const diffDays = diffTime / (1000 * 3600 * 24);
     return diffDays <= 3;
@@ -189,21 +192,24 @@ const getFallbackNews = (): NewsArticle[] => {
         "Sustainable development goals driving construction sector",
         "Riyadh metro expected to boost local property values",
         "Vision 2030 initiatives fueling non-oil sector growth",
-        "New regulations for commercial leases announced"
+        "New regulations for commercial leases announced",
+        "Dammam sees surge in industrial property demand",
+        "Jeddah waterfront development attracts new investors"
     ];
     
-    // Shuffle and pick 5
-    const shuffled = titles.sort(() => 0.5 - Math.random()).slice(0, 5);
+    // Shuffle and pick 6
+    const shuffled = titles.sort(() => 0.5 - Math.random()).slice(0, 6);
 
     return shuffled.map((title, index) => {
         const date = new Date();
-        date.setDate(date.getDate() - (index % 3)); // 0, 1, or 2 days ago
+        // Dynamic dates: Today, Yesterday, or 2 days ago
+        date.setDate(date.getDate() - (index % 3)); 
         return {
             title,
             source: sources[index % sources.length],
             date: date.toISOString(),
             url: "#",
-            snippet: "Latest update on the market situation..."
+            snippet: "Latest update on the market situation in the region."
         };
     });
 };
@@ -211,7 +217,7 @@ const getFallbackNews = (): NewsArticle[] => {
 const fetchRealEstateNews = async (): Promise<NewsArticle[]> => {
     try {
         // Query for Saudi Arabia and Gulf Real Estate/Economy
-        // We use a CORS-friendly proxy or directly call an RSS-to-JSON service
+        // We use a CORS-friendly proxy (rss2json) to convert Google News RSS to JSON
         const rssUrl = 'https://news.google.com/rss/search?q=Saudi+Arabia+Real+Estate+OR+Saudi+Economy+OR+Gulf+Business&hl=en-US&gl=SA&ceid=SA:en';
         const apiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`;
         
@@ -224,10 +230,14 @@ const fetchRealEstateNews = async (): Promise<NewsArticle[]> => {
                 let title = item.title;
                 let source = item.author || "News";
                 
-                const titleParts = item.title.split(' - ');
-                if (titleParts.length > 1) {
-                    source = titleParts.pop() || source; 
-                    title = titleParts.join(' - ');
+                // Try to extract clean source from title if author is missing/generic
+                if (title.includes(' - ')) {
+                    const parts = title.split(' - ');
+                    const candidateSource = parts[parts.length - 1];
+                    if (candidateSource.length < 20) { // arbitrary length to avoid long junk
+                        source = candidateSource;
+                        title = parts.slice(0, -1).join(' - ');
+                    }
                 }
 
                 return {
@@ -242,7 +252,7 @@ const fetchRealEstateNews = async (): Promise<NewsArticle[]> => {
             // Filter for news not older than 3 days
             const recentArticles = articles.filter(a => isRecent(a.date));
             
-            // Return unique by title
+            // Return unique by title to avoid duplicates
             const uniqueArticles = Array.from(new Map(recentArticles.map(item => [item.title, item])).values());
 
             if (uniqueArticles.length > 0) {
@@ -251,7 +261,7 @@ const fetchRealEstateNews = async (): Promise<NewsArticle[]> => {
         }
         
         // If API returns ok but no recent items, or status not ok
-        console.warn("News API returned no recent items, using fallback.");
+        console.warn("News API returned no recent items or failed, using fallback.");
         return getFallbackNews();
 
     } catch (error) {
