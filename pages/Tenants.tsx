@@ -241,13 +241,16 @@ export default function Tenants() {
         return;
     }
 
-    // Parse date as UTC Midnight to ensure whole-day calculations without time offsets
+    // Robust UTC date parsing from YYYY-MM-DD string
     const parseToUtcMidnight = (dateStr?: string) => {
         if (!dateStr) return null;
-        const d = new Date(dateStr);
-        if (isNaN(d.getTime())) return null;
-        // Create UTC date at 00:00:00
-        return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+        // Split explicitly to avoid browser timezone interference
+        const parts = dateStr.split('-');
+        if (parts.length !== 3) return null;
+        const year = parseInt(parts[0]);
+        const month = parseInt(parts[1]) - 1; // Month is 0-indexed
+        const day = parseInt(parts[2]);
+        return new Date(Date.UTC(year, month, day));
     };
 
     const startDate = parseToUtcMidnight(activeContract.start_date);
