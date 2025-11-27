@@ -39,6 +39,7 @@ type FormData = {
   water_bill_paid: boolean;
   gas_bill_paid: boolean;
   internet_bill_paid: boolean;
+  generator_config?: any;
 };
 
 // New Interface for the Smart Generator Groups
@@ -82,6 +83,27 @@ export default function PropertyForm({ property, units, onClose }: { property: P
     internet_bill_paid: property?.internet_bill_paid || false,
   });
   
+  // Unit Generation Mode State
+  const [unitGenMode, setUnitGenMode] = useState<'simple' | 'smart'>('simple');
+  // Control whether to run the generator on save
+  const [shouldGenerateUnits, setShouldGenerateUnits] = useState(false);
+
+  // Simple Generator State
+  const [simpleGen, setSimpleGen] = useState({
+    family_count: 0,
+    bachelor_count: 0,
+    start_number: 1,
+  });
+
+  // Smart Generator State
+  const [familyGroups, setFamilyGroups] = useState<UnitGenGroup[]>([]);
+  const [bachelorGroups, setBachelorGroups] = useState<UnitGenGroup[]>([]);
+
+  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  
+  const queryClient = useQueryClient();
+
   // Ensure form is populated correctly when editing (re-run if property changes)
   useEffect(() => {
     if (property) {
@@ -109,39 +131,41 @@ export default function PropertyForm({ property, units, onClose }: { property: P
             gas_bill_paid: property.gas_bill_paid || false,
             internet_bill_paid: property.internet_bill_paid || false,
         });
+
+        // Restore Generator Configuration
+        if (property.generator_config) {
+            const config = property.generator_config;
+            setUnitGenMode(config.mode || 'simple');
+            if (config.simple) setSimpleGen(config.simple);
+            if (config.smart) {
+                setFamilyGroups(config.smart.family || []);
+                setBachelorGroups(config.smart.bachelor || []);
+            }
+            // By default in Edit mode, do NOT generate units unless user opts in
+            setShouldGenerateUnits(false);
+        }
+    } else {
+        // New Property Mode: Enable generation by default
+        setShouldGenerateUnits(true);
     }
   }, [property]);
-  
-  // Unit Generation Mode State
-  const [unitGenMode, setUnitGenMode] = useState<'simple' | 'smart'>('simple');
-
-  // Simple Generator State
-  const [simpleGen, setSimpleGen] = useState({
-    family_count: 0,
-    bachelor_count: 0,
-    start_number: 1,
-  });
 
   // Calculate next available unit number when property units load or change
   useEffect(() => {
-      if (property && units) {
+      // Only auto-set start number if we are adding a NEW property or explicitly requested
+      if ((!property || shouldGenerateUnits) && property && units) {
         const propertyUnits = units.filter(u => u.property_id === property.id);
         const maxNum = propertyUnits.reduce((max, u) => {
             const num = parseInt(u.unit_number);
             return !isNaN(num) && num > max ? num : max;
         }, 0);
-        setSimpleGen(prev => ({ ...prev, start_number: maxNum + 1 }));
+        // Only update if simpleGen hasn't been manually touched (simple heuristic)
+        if(simpleGen.start_number === 1) {
+             setSimpleGen(prev => ({ ...prev, start_number: maxNum + 1 }));
+        }
       }
-  }, [property, units]);
+  }, [property, units, shouldGenerateUnits]);
 
-  // Smart Generator State
-  const [familyGroups, setFamilyGroups] = useState<UnitGenGroup[]>([]);
-  const [bachelorGroups, setBachelorGroups] = useState<UnitGenGroup[]>([]);
-
-  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  
-  const queryClient = useQueryClient();
 
   const addGroup = (type: 'Family' | 'Bachelor') => {
     const newGroup: UnitGenGroup = {
@@ -194,6 +218,16 @@ export default function PropertyForm({ property, units, onClose }: { property: P
         if (!cleanedData.lease_end_date) cleanedData.lease_end_date = null;
       }
 
+      // Save Generator Config
+      cleanedData.generator_config = {
+          mode: unitGenMode,
+          simple: simpleGen,
+          smart: {
+              family: familyGroups,
+              bachelor: bachelorGroups
+          }
+      };
+
       // --- FILE UPLOAD ---
       let lease_invoice_url = property?.lease_invoice_url || null;
       if(invoiceFile) {
@@ -217,46 +251,25 @@ export default function PropertyForm({ property, units, onClose }: { property: P
 
       // --- GENERATE / UPDATE LEASE PAYMENTS (IF LEASED) ---
       if (savedProperty.is_leased && savedProperty.lease_start_date && savedProperty.lease_end_date && savedProperty.owner_rent_amount && savedProperty.owner_rent_frequency) {
-        
-        // 1. Fetch existing payments for this property
+        // ... (Existing Lease Payment Logic - Keeping it intact)
         const existingPayments = await base44.entities.LeasePayment.list() as LeasePayment[];
         const propertyPayments = existingPayments.filter(p => p.property_id === savedProperty.id);
-        
-        // 2. Identify unpaid payments to remove (Regenerate logic)
-        // We remove 'unpaid' ones so we can recreate them with new terms (date, amount).
-        // We keep 'paid' or 'partial' to preserve history.
-        const unpaidPaymentIds = propertyPayments
-            .filter(p => p.status === 'unpaid')
-            .map(p => p.id);
-        
-        if (unpaidPaymentIds.length > 0) {
-             await base44.entities.LeasePayment.bulkDelete(unpaidPaymentIds);
-        }
+        const unpaidPaymentIds = propertyPayments.filter(p => p.status === 'unpaid').map(p => p.id);
+        if (unpaidPaymentIds.length > 0) await base44.entities.LeasePayment.bulkDelete(unpaidPaymentIds);
 
-        // 3. Calculate the ideal schedule based on new terms
         const startDate = new Date(savedProperty.lease_start_date);
-        // endDate calculation adjustment for inclusive/exclusive loop
         const endDateStr = savedProperty.lease_end_date;
-        
         const annualRent = savedProperty.owner_rent_amount;
         const frequency = savedProperty.owner_rent_frequency;
-
         let monthsIncrement = 12;
         let paymentsPerYear = 1;
-
-        if (frequency === '6_months') {
-            monthsIncrement = 6;
-            paymentsPerYear = 2;
-        } else if (frequency === '3_months') {
-            monthsIncrement = 3;
-            paymentsPerYear = 4;
-        }
+        if (frequency === '6_months') { monthsIncrement = 6; paymentsPerYear = 2; } 
+        else if (frequency === '3_months') { monthsIncrement = 3; paymentsPerYear = 4; }
 
         const amountPerPayment = annualRent / paymentsPerYear;
         const potentialPayments = [];
         let currentDate = new Date(startDate);
 
-        // Generate full schedule from start to end
         while (format(currentDate, 'yyyy-MM-dd') < endDateStr) {
             potentialPayments.push({
                 property_id: savedProperty.id,
@@ -265,140 +278,87 @@ export default function PropertyForm({ property, units, onClose }: { property: P
                 paid_amount: 0,
                 status: 'unpaid'
             });
-            // Add Gregorian months
             currentDate.setUTCMonth(currentDate.getUTCMonth() + monthsIncrement);
         }
-
-        // 4. Filter: Only create payments if there isn't already a PAID/PARTIAL payment matching that date
-        // This prevents duplication if the user is just editing a property name but kept the schedule.
         const remainingPayments = propertyPayments.filter(p => p.status !== 'unpaid');
-        
         const paymentsToCreate = potentialPayments.filter(newP => {
              return !remainingPayments.some(existingP => existingP.due_date === newP.due_date);
         });
-
-        if (paymentsToCreate.length > 0) {
-            await base44.entities.LeasePayment.bulkCreate(paymentsToCreate);
-        }
+        if (paymentsToCreate.length > 0) await base44.entities.LeasePayment.bulkCreate(paymentsToCreate);
       } else if (!savedProperty.is_leased && property && property.is_leased) {
-          // Case: Property was leased, now updated to NOT leased.
-          // Remove all unpaid obligations.
            const existingPayments = await base44.entities.LeasePayment.list() as LeasePayment[];
-           const unpaidIds = existingPayments
-                .filter(p => p.property_id === savedProperty.id && p.status === 'unpaid')
-                .map(p => p.id);
-           if(unpaidIds.length > 0) {
-               await base44.entities.LeasePayment.bulkDelete(unpaidIds);
-           }
+           const unpaidIds = existingPayments.filter(p => p.property_id === savedProperty.id && p.status === 'unpaid').map(p => p.id);
+           if(unpaidIds.length > 0) await base44.entities.LeasePayment.bulkDelete(unpaidIds);
       }
       
       // --- UNIT CREATION ---
-      let newUnits = [];
-      
-      const allUnits = await base44.entities.Unit.list() as Unit[];
-      const existingUnits = allUnits.filter(u => u.property_id === savedProperty.id);
-      const maxExistingNum = existingUnits.reduce((max, u) => {
-          const num = parseInt(u.unit_number);
-          return !isNaN(num) && num > max ? num : max;
-        }, 0);
+      // Only run if explicitly requested via checkbox or if it's a new property (checked by default)
+      if (shouldGenerateUnits) {
+          let newUnits = [];
+          const allUnits = await base44.entities.Unit.list() as Unit[];
+          const existingUnits = allUnits.filter(u => u.property_id === savedProperty.id);
+          const maxExistingNum = existingUnits.reduce((max, u) => {
+              const num = parseInt(u.unit_number);
+              return !isNaN(num) && num > max ? num : max;
+            }, 0);
 
-
-      if (unitGenMode === 'simple') {
-          // SIMPLE MODE GENERATION
-          // Set specs to 0 to indicate "Unspecified" / "Standard"
-          let currentUnitNum = simpleGen.start_number > 1 ? simpleGen.start_number : maxExistingNum + 1;
-
-          // Generate Family Units
-          if (simpleGen.family_count > 0) {
-              for (let i = 0; i < simpleGen.family_count; i++) {
+          if (unitGenMode === 'simple') {
+              let currentUnitNum = simpleGen.start_number > 1 ? simpleGen.start_number : maxExistingNum + 1;
+              if (simpleGen.family_count > 0) {
+                  for (let i = 0; i < simpleGen.family_count; i++) {
+                      newUnits.push({
+                          property_id: savedProperty.id,
+                          unit_number: currentUnitNum.toString(),
+                          unit_type: 'Flat',
+                          num_rooms: 0, num_halls: 0, num_kitchens: 0, num_bathrooms: 0,
+                          occupancy_type: 'Family', furnished: false, has_parking: false, rent_amount: 0, status: "vacant",
+                      });
+                      currentUnitNum++;
+                  }
+              }
+              if (simpleGen.bachelor_count > 0) {
+                  for (let i = 0; i < simpleGen.bachelor_count; i++) {
+                      newUnits.push({
+                          property_id: savedProperty.id,
+                          unit_number: currentUnitNum.toString(),
+                          unit_type: 'Flat',
+                          num_rooms: 0, num_halls: 0, num_kitchens: 0, num_bathrooms: 0,
+                          occupancy_type: 'Bachelor', furnished: false, has_parking: false, rent_amount: 0, status: "vacant",
+                      });
+                      currentUnitNum++;
+                  }
+              }
+          } else {
+              let currentUnitNum = maxExistingNum + 1;
+              for (const group of familyGroups) {
+                for (let i = 0; i < group.count; i++) {
                   newUnits.push({
-                      property_id: savedProperty.id,
-                      unit_number: currentUnitNum.toString(),
-                      unit_type: 'Flat',
-                      num_rooms: 0, 
-                      num_halls: 0,
-                      num_kitchens: 0,
-                      num_bathrooms: 0,
-                      occupancy_type: 'Family',
-                      furnished: false,
-                      has_parking: false,
-                      rent_amount: 0,
-                      status: "vacant",
+                    property_id: savedProperty.id,
+                    unit_number: currentUnitNum.toString(),
+                    unit_type: group.unit_type,
+                    num_rooms: group.rooms, num_halls: group.halls, num_kitchens: group.kitchens, num_bathrooms: group.bathrooms,
+                    occupancy_type: 'Family', furnished: group.furnished, has_parking: group.parking, rent_amount: group.rent_amount || 0, status: "vacant",
                   });
                   currentUnitNum++;
+                }
               }
-          }
-          
-          // Generate Bachelor Units
-          if (simpleGen.bachelor_count > 0) {
-              for (let i = 0; i < simpleGen.bachelor_count; i++) {
-                  newUnits.push({
-                      property_id: savedProperty.id,
-                      unit_number: currentUnitNum.toString(),
-                      unit_type: 'Flat',
-                      num_rooms: 0,
-                      num_halls: 0,
-                      num_kitchens: 0,
-                      num_bathrooms: 0,
-                      occupancy_type: 'Bachelor',
-                      furnished: false,
-                      has_parking: false,
-                      rent_amount: 0,
-                      status: "vacant",
+              for (const group of bachelorGroups) {
+                for (let i = 0; i < group.count; i++) {
+                   newUnits.push({
+                    property_id: savedProperty.id,
+                    unit_number: currentUnitNum.toString(),
+                    unit_type: group.unit_type,
+                    num_rooms: group.rooms, num_halls: group.halls, num_kitchens: group.kitchens, num_bathrooms: group.bathrooms,
+                    occupancy_type: 'Bachelor', furnished: group.furnished, has_parking: group.parking, rent_amount: group.rent_amount || 0, status: "vacant",
                   });
                   currentUnitNum++;
+                }
               }
           }
 
-      } else {
-          // SMART MODE GENERATION
-          let currentUnitNum = maxExistingNum + 1;
-
-          // Process Family Groups
-          for (const group of familyGroups) {
-            for (let i = 0; i < group.count; i++) {
-              newUnits.push({
-                property_id: savedProperty.id,
-                unit_number: currentUnitNum.toString(),
-                unit_type: group.unit_type,
-                num_rooms: group.rooms,
-                num_halls: group.halls,
-                num_kitchens: group.kitchens,
-                num_bathrooms: group.bathrooms,
-                occupancy_type: 'Family',
-                furnished: group.furnished,
-                has_parking: group.parking,
-                rent_amount: group.rent_amount || 0,
-                status: "vacant",
-              });
-              currentUnitNum++;
-            }
+          if (newUnits.length > 0) {
+            await base44.entities.Unit.bulkCreate(newUnits);
           }
-
-          // Process Bachelor Groups
-          for (const group of bachelorGroups) {
-            for (let i = 0; i < group.count; i++) {
-               newUnits.push({
-                property_id: savedProperty.id,
-                unit_number: currentUnitNum.toString(),
-                unit_type: group.unit_type,
-                num_rooms: group.rooms,
-                num_halls: group.halls,
-                num_kitchens: group.kitchens,
-                num_bathrooms: group.bathrooms,
-                occupancy_type: 'Bachelor',
-                furnished: group.furnished,
-                has_parking: group.parking,
-                rent_amount: group.rent_amount || 0,
-                status: "vacant",
-              });
-              currentUnitNum++;
-            }
-          }
-      }
-
-      if (newUnits.length > 0) {
-        await base44.entities.Unit.bulkCreate(newUnits);
       }
 
       return savedProperty;
@@ -618,9 +578,17 @@ export default function PropertyForm({ property, units, onClose }: { property: P
                     <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide bg-blue-50 p-2 rounded inline-block">Unit Generator</h3>
                     <p className="text-[10px] text-slate-500 mt-1">Choose "Simple" for basic bulk add, or "Smart" for complex groupings.</p>
                  </div>
-                 <div className="flex bg-slate-100 p-1 rounded-lg gap-1">
-                    <button type="button" onClick={() => setUnitGenMode('simple')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${unitGenMode === 'simple' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>Simple</button>
-                    <button type="button" onClick={() => setUnitGenMode('smart')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${unitGenMode === 'smart' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>Smart</button>
+                 <div className="flex items-center gap-3">
+                     {property && (
+                         <div className="flex items-center space-x-2 bg-yellow-50 px-2 py-1 rounded border border-yellow-200">
+                             <Switch id="gen_units" checked={shouldGenerateUnits} onCheckedChange={setShouldGenerateUnits} className="scale-75" />
+                             <Label htmlFor="gen_units" className="text-[10px] font-bold text-yellow-800 cursor-pointer">Generate / Add Units</Label>
+                         </div>
+                     )}
+                     <div className="flex bg-slate-100 p-1 rounded-lg gap-1">
+                        <button type="button" onClick={() => setUnitGenMode('simple')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${unitGenMode === 'simple' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>Simple</button>
+                        <button type="button" onClick={() => setUnitGenMode('smart')} className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${unitGenMode === 'smart' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}>Smart</button>
+                     </div>
                  </div>
              </div>
 

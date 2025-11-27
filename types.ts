@@ -30,6 +30,20 @@ export interface Property {
   gas_bill_paid?: boolean;
   internet_bill_paid?: boolean;
 
+  // Generator Configuration
+  generator_config?: {
+    mode: 'simple' | 'smart';
+    simple: {
+      family_count: number;
+      bachelor_count: number;
+      start_number: number;
+    };
+    smart: {
+      family: any[];
+      bachelor: any[];
+    };
+  };
+
   created_at: string;
 }
 
