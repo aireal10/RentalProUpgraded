@@ -68,7 +68,7 @@ export const SidebarMenuItem = ({ children, className = '', ...props }: React.Li
 
 export const SidebarMenuButton = ({ children, className = '', asChild = false, ...props }: { children?: React.ReactNode; className?: string; asChild?: boolean } & React.HTMLAttributes<HTMLElement>) => {
   if (asChild) {
-    const child = React.Children.only(children) as React.ReactElement;
+    const child = React.Children.only(children) as React.ReactElement<any>;
     return React.cloneElement(child, {
       ...props,
       className: `${child.props.className || ''} ${className || ''}`.trim()

@@ -1,8 +1,9 @@
+
 import React from 'react';
 
 // FIX: Changed to a type intersection to correctly include all button attributes.
 type ButtonProps = {
-  variant?: 'default' | 'outline' | 'ghost';
+  variant?: 'default' | 'outline' | 'ghost' | 'destructive';
   size?: 'default' | 'sm' | 'icon';
 } & React.ButtonHTMLAttributes<HTMLButtonElement>;
 
@@ -13,6 +14,7 @@ export const Button = ({ children, className = '', variant = 'default', size = '
     default: 'bg-slate-900 text-white hover:bg-slate-800',
     outline: 'border border-slate-200 hover:bg-slate-100',
     ghost: 'hover:bg-slate-100',
+    destructive: 'bg-red-600 text-white hover:bg-red-700',
   };
 
   const sizeClasses = {

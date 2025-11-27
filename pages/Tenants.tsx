@@ -540,7 +540,7 @@ export default function Tenants() {
                           <li><strong>Total payment received from tenant:</strong> <span>SAR ${totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></li>
                           <li><strong>Electricity bill to be paid by the undersigned tenant.</strong></li>
                           <li><strong>Water bill to be paid by the undersigned tenant.</strong></li>
-                          <li><strong>Electricity bill #:</strong> <span>${unit?.electricity_account || '____________________'}</span></li>
+                          <li><strong>Electricity bill #:</strong> <span>${unit?.electricity_meter || '____________________'}</span></li>
                       </ul>
                       <ol class="clauses-list">
                           <li>Rent paid in advance will not be refunded under any circumstances, even in cases of natural disasters, fire, or war.</li>
